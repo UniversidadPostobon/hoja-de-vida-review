@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Postobón | Validador de Asistencia</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Plus Jakarta Sans', 'sans-serif'] },
+          colors: {
+            brand: { blue: '#0063A8', purple: '#612C7D', pink: '#D60078', gold: '#D4A516' }
+          }
+        }
+      }
+    }
+  </script>
+
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0b0f19; }
+    .glass-card { background: rgba(15, 23, 42, 0.65); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.1); }
+    .glow-btn { position: relative; overflow: hidden; }
+    .glow-btn::after {
+      content: ''; position: absolute; inset: -2px;
+      background: linear-gradient(120deg, #0063A8, #612C7D, #D60078, #D4A516);
+      filter: blur(18px); opacity: 0; transition: opacity 0.35s ease; z-index: -1;
+    }
+    .glow-btn:hover::after { opacity: 0.75; }
+    .bubble-loader { display: flex; gap: 6px; align-items: center; justify-content: center; }
+    .bubble-loader span {
+      width: 10px; height: 10px; border-radius: 9999px;
+      background: linear-gradient(135deg, #0063A8, #D60078);
+      display: inline-block; animation: bounce-bubble 1s infinite ease-in-out;
+    }
+    .bubble-loader span:nth-child(2) { animation-delay: 0.15s; }
+    .bubble-loader span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce-bubble {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.6; }
+      40% { transform: translateY(-10px); opacity: 1; }
+    }
+    #scanner-container video, #scanner-container canvas {
+      width: 100% !important; height: 100% !important; object-fit: cover; border-radius: 0.75rem;
+    }
+  </style>
+</head>
+<body class="min-h-screen text-white flex items-center justify-center px-4 py-10">
+
+  <div class="glass-card w-full max-w-md rounded-3xl shadow-2xl p-6 sm:p-8">
+
+    <div class="text-center mb-6">
+      <div class="mx-auto mb-3 w-14 h-14 rounded-2xl bg-[linear-gradient(135deg,#0063A8,#612C7D,#D60078,#D4A516)] flex items-center justify-center shadow-lg">
+        <i data-lucide="scan-line" class="w-7 h-7 text-white"></i>
+      </div>
+      <h1 class="text-xl font-extrabold">Validador de Asistencia</h1>
+      <p class="text-white/50 text-xs mt-1">Postobón · Generación que Refresca</p>
+    </div>
+
+    <!-- ================= CONFIGURACIÓN (solo primera vez) ================= -->
+    <div id="config-panel" class="space-y-3 mb-2">
+      <p class="text-white/40 text-xs">Configura esto una sola vez por dispositivo (queda guardado en este navegador).</p>
+      <div>
+        <label class="text-xs text-white/60 mb-1 block">URL de tu Web App de Apps Script (termina en /exec)</label>
+        <input type="text" id="input-webapp-url" placeholder="https://script.google.com/macros/s/XXXX/exec"
+          class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-purple transition">
+      </div>
+      <div>
+        <label class="text-xs text-white/60 mb-1 block">Contraseña de Asistencia (la misma del portal principal)</label>
+        <input type="password" id="input-token" placeholder="postobon123"
+          class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-purple transition">
+      </div>
+      <button onclick="guardarConfig()"
+        class="glow-btn w-full rounded-xl px-4 py-2.5 bg-gradient-to-r from-[#0063A8] to-[#612C7D] text-sm font-semibold shadow-lg transition-transform hover:scale-[1.02]">
+        Guardar y continuar
+      </button>
+    </div>
+
+    <!-- ================= ESCÁNER ================= -->
+    <div id="app-panel" class="hidden space-y-4">
+
+      <button id="btn-abrir-camara" onclick="abrirCamara()"
+        class="glow-btn w-full rounded-xl px-6 py-3 bg-gradient-to-r from-[#612C7D] to-[#D60078] font-semibold shadow-lg transition-transform hover:scale-[1.02] flex items-center justify-center gap-2">
+        <i data-lucide="camera" class="w-4 h-4"></i> Abrir cámara
+      </button>
+
+      <div id="scanner-wrapper" class="hidden">
+        <div id="scanner-container" class="w-full h-56 bg-black/40 rounded-xl overflow-hidden relative border border-white/10"></div>
+        <p class="text-white/40 text-xs mt-2 text-center">Apunta al código de barras de la cédula 📷</p>
+        <button onclick="detenerCamara()" class="mt-2 text-xs text-white/50 hover:text-white underline w-full text-center">Cancelar</button>
+      </div>
+
+      <div id="codigo-detectado" class="hidden bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+        <p class="text-white/50 text-xs mb-1">Cédula detectada:</p>
+        <p id="codigo-detectado-valor" class="text-2xl font-bold tracking-wider text-[#D60078]"></p>
+        <div class="flex gap-2 mt-3">
+          <button onclick="reiniciarEscaneo()" class="flex-1 rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 text-sm transition">Escanear otra</button>
+          <button onclick="enviarDetectado()" class="flex-1 rounded-xl px-4 py-2 bg-gradient-to-r from-[#612C7D] to-[#D60078] text-sm font-semibold transition-transform hover:scale-[1.02]">Enviar</button>
+        </div>
+      </div>
+
+      <div class="pt-3 border-t border-white/10">
+        <label class="text-xs text-white/60 mb-1 flex items-center gap-1">
+          <i data-lucide="keyboard" class="w-3.5 h-3.5"></i> ¿La cámara no funciona? Escribe la cédula
+        </label>
+        <div class="flex gap-2">
+          <input type="text" id="input-cedula-manual" placeholder="Ej: 1035800000"
+            class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
+          <button onclick="enviarManual()"
+            class="rounded-xl px-4 py-3 bg-gradient-to-r from-[#D60078] to-[#D4A516] shadow-lg transition-transform hover:scale-[1.02]">
+            <i data-lucide="send" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <div id="status-box" class="text-sm text-center hidden"></div>
+
+      <button onclick="cambiarConfig()" class="text-white/30 text-xs underline w-full text-center pt-2">Cambiar configuración</button>
+    </div>
+  </div>
+
+  <script>
+    /* ============== Persistencia de configuración (por navegador) ============== */
+    function guardarConfig() {
+      const url = document.getElementById('input-webapp-url').value.trim();
+      const token = document.getElementById('input-token').value.trim();
+      if (!url || !token) {
+        alert('Completa la URL y la contraseña antes de continuar.');
+        return;
+      }
+      localStorage.setItem('postobon_webapp_url', url);
+      localStorage.setItem('postobon_token', token);
+      mostrarApp();
+    }
+
+    function cambiarConfig() {
+      document.getElementById('app-panel').classList.add('hidden');
+      document.getElementById('config-panel').classList.remove('hidden');
+    }
+
+    function mostrarApp() {
+      document.getElementById('config-panel').classList.add('hidden');
+      document.getElementById('app-panel').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      lucide.createIcons();
+      const savedUrl = localStorage.getItem('postobon_webapp_url');
+      const savedToken = localStorage.getItem('postobon_token');
+      if (savedUrl && savedToken) {
+        document.getElementById('input-webapp-url').value = savedUrl;
+        document.getElementById('input-token').value = savedToken;
+        mostrarApp();
+      }
+    });
+
+    /* ============== Estado / loader ============== */
+    function mostrarEstado(mensaje, tipo) {
+      const el = document.getElementById('status-box');
+      el.classList.remove('hidden');
+      el.className = 'text-sm text-center ' + (tipo === 'ok' ? 'text-emerald-400' : tipo === 'error' ? 'text-[#D60078]' : 'text-white/60');
+      el.innerHTML = mensaje;
+    }
+    function loaderBurbujas() {
+      return '<div class="bubble-loader"><span></span><span></span><span></span></div>';
+    }
+
+    /* ============== Cámara / Quagga ============== */
+    let scannerActivo = false;
+
+    function abrirCamara() {
+      document.getElementById('scanner-wrapper').classList.remove('hidden');
+      document.getElementById('codigo-detectado').classList.add('hidden');
+      document.getElementById('btn-abrir-camara').classList.add('hidden');
+
+      Quagga.init({
+        inputStream: {
+          name: 'Live',
+          type: 'LiveStream',
+          target: document.querySelector('#scanner-container'),
+          constraints: { facingMode: 'environment' }
+        },
+        decoder: {
+          readers: ['code_128_reader', 'code_39_reader', 'ean_reader', 'ean_8_reader']
+        },
+        locate: true
+      }, function (err) {
+        if (err) {
+          mostrarEstado('No se pudo acceder a la cámara. Usa el campo manual abajo. 👇', 'error');
+          detenerCamara();
+          return;
+        }
+        Quagga.start();
+        scannerActivo = true;
+      });
+
+      Quagga.onDetected(function (result) {
+        if (!scannerActivo) return;
+        const codigo = result.codeResult.code;
+        detenerCamara();
+        document.getElementById('codigo-detectado').classList.remove('hidden');
+        document.getElementById('codigo-detectado-valor').textContent = codigo;
+        lucide.createIcons();
+      });
+    }
+
+    function detenerCamara() {
+      if (scannerActivo) {
+        Quagga.stop();
+        scannerActivo = false;
+      }
+      document.getElementById('scanner-wrapper').classList.add('hidden');
+      document.getElementById('btn-abrir-camara').classList.remove('hidden');
+    }
+
+    function reiniciarEscaneo() {
+      document.getElementById('codigo-detectado').classList.add('hidden');
+      abrirCamara();
+    }
+
+    function enviarDetectado() {
+      const codigo = document.getElementById('codigo-detectado-valor').textContent;
+      enviarCedula(codigo);
+    }
+
+    function enviarManual() {
+      const codigo = document.getElementById('input-cedula-manual').value.trim();
+      if (!codigo) return;
+      enviarCedula(codigo);
+    }
+
+    /* ============== Envío al Web App de Apps Script ============== */
+    function enviarCedula(codigo) {
+      const url = localStorage.getItem('postobon_webapp_url');
+      const token = localStorage.getItem('postobon_token');
+
+      mostrarEstado('Guardando... ' + loaderBurbujas(), 'info');
+
+      // OJO: se usa 'text/plain' a propósito. Si se usa 'application/json',
+      // el navegador dispara una petición "preflight" (OPTIONS) que Apps
+      // Script no sabe responder, y la petición falla por CORS. Con
+      // text/plain se evita el preflight; el servidor igual interpreta
+      // el contenido como JSON (ver doPost en Code.gs).
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ cedula: codigo, token: token })
+      })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          mostrarEstado(data.message, data.status);
+          document.getElementById('input-cedula-manual').value = '';
+        })
+        .catch(function (err) {
+          mostrarEstado('Error de conexión: ' + err.message, 'error');
+        });
+    }
+  </script>
+</body>
+</html>
