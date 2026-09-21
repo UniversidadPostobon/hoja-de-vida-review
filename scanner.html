@@ -16,7 +16,7 @@
         extend: {
           fontFamily: { sans: ['Plus Jakarta Sans', 'sans-serif'] },
           colors: {
-            brand: { blue: '#0063A8', purple: '#612C7D', pink: '#D60078', gold: '#D4A516' }
+            brand: { blue: '#0063A8', blueDark: '#004D82', purple: '#612C7D', pink: '#D60078', gold: '#D4A516' }
           }
         }
       }
@@ -25,25 +25,49 @@
 
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 
-  <!-- ZXing: sí soporta PDF417 (el código de la cédula colombiana clásica).
-       QuaggaJS, que usábamos antes, solo lee códigos de barras 1D
-       (Code128, EAN, etc.) y por eso "adivinaba" un número que no era. -->
-  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
+  <!-- Tesseract.js: lectura de texto (OCR) de la foto de la cédula.
+       Ya NO leemos el código de barras (no estaba funcionando bien);
+       ahora se lee el texto impreso directamente. -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0b0f19; }
-    .glass-card { background: rgba(15, 23, 42, 0.65); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.1); }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0b0f19; overflow-x: hidden; }
+
+    #bubbles-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+    .bubble {
+      position: absolute; bottom: -10%; border-radius: 9999px;
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.6), rgba(0,99,168,0.08));
+      border: 1px solid rgba(255,255,255,0.18);
+      animation-name: rise; animation-timing-function: ease-in; animation-iteration-count: infinite;
+    }
+    @keyframes rise {
+      0%   { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+      10%  { opacity: 0.8; }
+      100% { transform: translateY(-115vh) translateX(var(--drift, 20px)) scale(1.1); opacity: 0; }
+    }
+
+    .light-card { background: #ffffff; border: 1px solid rgba(0,99,168,0.08); }
+
+    .field-input {
+      width: 100%; background: #F5F9FC; border: 1px solid #DCE8F0; border-radius: 0.75rem;
+      padding: 0.75rem 1rem; font-size: 0.875rem; color: #0f172a; transition: box-shadow 0.2s, border-color 0.2s;
+    }
+    .field-input:focus { outline: none; border-color: #0063A8; box-shadow: 0 0 0 3px rgba(0,99,168,0.15); }
+    .field-input::placeholder { color: #94A3B8; }
+    .field-label { font-size: 0.75rem; color: #475569; margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.25rem; }
+
     .glow-btn { position: relative; overflow: hidden; }
     .glow-btn::after {
       content: ''; position: absolute; inset: -2px;
-      background: linear-gradient(120deg, #0063A8, #612C7D, #D60078, #D4A516);
+      background: linear-gradient(120deg, #0063A8, #00A3E0, #612C7D);
       filter: blur(18px); opacity: 0; transition: opacity 0.35s ease; z-index: -1;
     }
-    .glow-btn:hover::after { opacity: 0.75; }
+    .glow-btn:hover::after { opacity: 0.6; }
+
     .bubble-loader { display: flex; gap: 6px; align-items: center; justify-content: center; }
     .bubble-loader span {
       width: 10px; height: 10px; border-radius: 9999px;
-      background: linear-gradient(135deg, #0063A8, #D60078);
+      background: linear-gradient(135deg, #0063A8, #00A3E0);
       display: inline-block; animation: bounce-bubble 1s infinite ease-in-out;
     }
     .bubble-loader span:nth-child(2) { animation-delay: 0.15s; }
@@ -52,109 +76,132 @@
       0%, 80%, 100% { transform: translateY(0); opacity: 0.6; }
       40% { transform: translateY(-10px); opacity: 1; }
     }
-    #video-preview {
+
+    #video-preview, #captura-preview {
       width: 100%; height: 14rem; object-fit: cover; border-radius: 0.75rem;
-      background: #000; border: 1px solid rgba(255,255,255,0.1);
+      background: #000; border: 1px solid #DCE8F0;
     }
+    .guia-recuadro {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 88%; height: 60%;
+      border: 2px dashed rgba(0,163,224,0.9);
+      border-radius: 0.5rem;
+      pointer-events: none;
+    }
+    .video-wrap { position: relative; }
     .scan-pulse {
       display: flex; align-items: center; justify-content: center; gap: 8px;
-      color: rgba(255,255,255,0.6); font-size: 0.75rem; margin-top: 0.5rem;
+      color: #475569; font-size: 0.75rem; margin-top: 0.5rem;
     }
   </style>
 </head>
-<body class="min-h-screen text-white flex items-center justify-center px-4 py-10">
+<body class="min-h-screen text-white flex flex-col items-center justify-center px-4 py-10 relative">
 
-  <div class="glass-card w-full max-w-md rounded-3xl shadow-2xl p-6 sm:p-8">
+  <div id="bubbles-bg"></div>
 
-    <div class="text-center mb-6">
-      <div class="mx-auto mb-3 w-14 h-14 rounded-2xl bg-[linear-gradient(135deg,#0063A8,#612C7D,#D60078,#D4A516)] flex items-center justify-center shadow-lg">
-        <i data-lucide="scan-line" class="w-7 h-7 text-white"></i>
-      </div>
-      <h1 class="text-xl font-extrabold">Validador de Asistencia</h1>
-      <p class="text-white/50 text-xs mt-1">Postobón · Generación que Refresca</p>
-    </div>
+  <div class="relative z-10 w-full max-w-md flex flex-col items-center">
 
-    <!-- ================= CONFIGURACIÓN (solo primera vez, en este dispositivo) ================= -->
-    <div id="config-panel" class="space-y-3 mb-2">
-      <p class="text-white/40 text-xs">Solo la primera vez en este celular/computador. La URL ya viene configurada, solo falta la contraseña.</p>
-      <div>
-        <label class="text-xs text-white/60 mb-1 block">Contraseña de Asistencia (la misma del portal principal)</label>
-        <input type="password" id="input-token" placeholder="postobon123"
-          class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-purple transition">
-      </div>
-      <button onclick="guardarConfig()"
-        class="glow-btn w-full rounded-xl px-4 py-2.5 bg-gradient-to-r from-[#0063A8] to-[#612C7D] text-sm font-semibold shadow-lg transition-transform hover:scale-[1.02]">
-        Guardar y continuar
-      </button>
-    </div>
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAsQAAAECCAMAAADO0jGFAAAAM1BMVEVHcEz////////////////////////////////////////////////////////////////P0YphAAAAEHRSTlMAoCBgwEDQ8BCAMOCwUHCQIgpPZwAAIc1JREFUeNrtXdd26zoODatEVf//1960k9gSCxptKpd4mZk1J7JEbrQNEHx7a0m0c1t4l8W+y8d/Cc5Nb126XEGm9R24wy0h74DenO6r1KVRGV1Y/A0kdl/HvmBd2hJtFBC/P+JDDy+6NATg+UYSv3V73OX14nZ/44jqAXKXlwbBRg03tljXV7LLqxC83ISkW+Mu10bwp4QeG3d5rqyyCP6QuccUXZ4n0z7casjejXGX54QRm7/VEt9p4y71xalbTRnWvsRdKudy8622hL7MXeqJVsPtCaL6SnepFUfY25Oko7hLFXlCHNFR3KVmKByG21Olo7iLcCi8PxnCHcVdpLO52yukcxRdLg7hdzF98btci5CIVD167a7LtSH8UYHufRRdrg3hj26gvgldrhkL30nvzOxycQjfbnMPKLpcG8KdZ+tCladX53LSz911IUhLEL7dbN+QLlh5aptPz+26VGDV6hw7mq0KIazOOfP+n9Z2U9ylWj4nTwwPNqyRwtvH0MGhm+Iu4vncLl1w29dsWjbtoNClt7N1gco2CAMYQvGCDv53gqILLBgWzOcGZeC4Axw87Vxxl+cGw/OOjmFLMJ77BnUpGsMgh+Cpxgv0lswuTENYGcFfsbHvzWxd6PCxQnEwc27P3uOJLsRIQoZW84bfbWY6P9GFIqsErTbsMhgzQz9t1+UlnISXA9ja6x1dXsBJKFHiIBlR+L5dXSIiUN0YxG8nSEbofb+6nM0w/6aCuUag6nsTUBeg8PskKl3YNSV+rs/d7nJACjuhU9Us497bJ7oAhJ3Q1bxvbhx6za5L9YSu8pWJqh/v6FIwdHvbEH570x3EXaqa4WdcXOs7iLtkzPDSPoQTIXsHcZdPYTZK2Cd19boO4i51zLB9Wrlh7CDuUsMMz88sNgwdxF1iKT+rvDFsT31Z20Hc5Sy8KnN48njVDuIuJ5lYo6mWp5+qiIF46dv4vxZWldln8zm9hRCmZ4C49050M0wNhvPdlqoOcdFB3EXODO/5YHirBDHf+4m7CJES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" alt="Postobón" class="h-10 mb-5 select-none pointer-events-none">
 
-    <!-- ================= ESCÁNER ================= -->
-    <div id="app-panel" class="hidden space-y-4">
+    <div class="light-card w-full rounded-3xl shadow-2xl p-6 sm:p-8">
 
-      <p class="text-white/40 text-xs text-center bg-white/5 border border-white/10 rounded-xl p-2.5">
-        ⚠️ Este escáner lee el código de barras de la <strong>cédula física clásica</strong> (la de antes de 2022).
-        Si la cédula es del modelo digital más reciente, puede que no la reconozca — usa el campo manual en ese caso.
-      </p>
-
-      <button id="btn-abrir-camara" onclick="abrirCamara()"
-        class="glow-btn w-full rounded-xl px-6 py-3 bg-gradient-to-r from-[#612C7D] to-[#D60078] font-semibold shadow-lg transition-transform hover:scale-[1.02] flex items-center justify-center gap-2">
-        <i data-lucide="camera" class="w-4 h-4"></i> Abrir cámara
-      </button>
-
-      <div id="scanner-wrapper" class="hidden">
-        <video id="video-preview" autoplay muted playsinline></video>
-        <div id="scan-status" class="scan-pulse">
-          <div class="bubble-loader"><span></span><span></span><span></span></div>
-          <span>Buscando código de barras...</span>
+      <div class="text-center mb-6">
+        <div class="mx-auto mb-3 w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0063A8] to-[#00A3E0] flex items-center justify-center shadow-lg">
+          <i data-lucide="scan-line" class="w-7 h-7 text-white"></i>
         </div>
-        <button onclick="cancelarEscaneo()" class="mt-2 text-xs text-white/50 hover:text-white underline w-full text-center">Cancelar</button>
+        <h1 class="text-xl font-extrabold text-slate-900">Validador de Asistencia</h1>
+        <p class="text-slate-500 text-xs mt-1">Postobón · Generación que Refresca</p>
       </div>
 
-      <!-- Datos detectados: EDITABLES, para poder corregir si el escaneo falló parcialmente -->
-      <div id="datos-detectados" class="hidden bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-        <p class="text-white/50 text-xs">Revisa que los datos coincidan con el documento físico antes de enviar:</p>
+      <!-- ================= CONFIGURACIÓN (solo primera vez, en este dispositivo) ================= -->
+      <div id="config-panel" class="space-y-3 mb-2">
+        <p class="text-slate-400 text-xs">Solo la primera vez en este celular/computador. La URL ya viene configurada, solo falta la contraseña.</p>
         <div>
-          <label class="text-xs text-white/60 mb-1 block">Cédula</label>
-          <input type="text" id="detectado-cedula" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
+          <label class="field-label">Contraseña de Asistencia (la misma del portal principal)</label>
+          <input type="password" id="input-token" placeholder="postobon123" class="field-input">
         </div>
-        <div>
-          <label class="text-xs text-white/60 mb-1 block">Nombre completo</label>
-          <input type="text" id="detectado-nombre" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
-        </div>
-        <div class="flex gap-2 pt-1">
-          <button onclick="reiniciarEscaneo()" class="flex-1 rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 text-sm transition">Escanear otra</button>
-          <button onclick="enviarDetectado()" class="flex-1 rounded-xl px-4 py-2 bg-gradient-to-r from-[#612C7D] to-[#D60078] text-sm font-semibold transition-transform hover:scale-[1.02]">Enviar</button>
-        </div>
+        <button onclick="guardarConfig()"
+          class="glow-btn w-full rounded-xl px-4 py-2.5 bg-gradient-to-r from-[#0063A8] to-[#00A3E0] text-white text-sm font-semibold shadow-lg transition-transform hover:scale-[1.02]">
+          Guardar y continuar
+        </button>
       </div>
 
-      <div class="pt-3 border-t border-white/10 space-y-2">
-        <label class="text-xs text-white/60 mb-1 flex items-center gap-1">
-          <i data-lucide="keyboard" class="w-3.5 h-3.5"></i> ¿La cámara no funciona o no lee bien? Escribe los datos
-        </label>
-        <input type="text" id="input-cedula-manual" placeholder="Cédula, ej: 1035800000"
-          class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
-        <div class="flex gap-2">
-          <input type="text" id="input-nombre-manual" placeholder="Nombre completo (opcional)"
-            class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
-          <button onclick="enviarManual()"
-            class="rounded-xl px-4 py-3 bg-gradient-to-r from-[#D60078] to-[#D4A516] shadow-lg transition-transform hover:scale-[1.02]">
-            <i data-lucide="send" class="w-4 h-4"></i>
+      <!-- ================= ESCÁNER ================= -->
+      <div id="app-panel" class="hidden space-y-4">
+
+        <p class="text-slate-500 text-xs text-center bg-[#EAF4FB] border border-[#0063A8]/10 rounded-xl p-2.5">
+          📸 Toma una foto clara del <strong>frente</strong> de la cédula (número y nombre). Si la lectura automática falla, corrígela abajo o escribe los datos a mano.
+        </p>
+
+        <button id="btn-abrir-camara" onclick="abrirCamara()"
+          class="glow-btn w-full rounded-xl px-6 py-3 bg-gradient-to-r from-[#612C7D] to-[#D60078] text-white font-semibold shadow-lg transition-transform hover:scale-[1.02] flex items-center justify-center gap-2">
+          <i data-lucide="camera" class="w-4 h-4"></i> Abrir cámara
+        </button>
+
+        <div id="scanner-wrapper" class="hidden space-y-2">
+          <div class="video-wrap">
+            <video id="video-preview" autoplay muted playsinline></video>
+            <div class="guia-recuadro"></div>
+          </div>
+          <p class="text-slate-400 text-xs text-center">Alinea la cédula dentro del recuadro punteado</p>
+          <button onclick="capturarFoto()"
+            class="glow-btn w-full rounded-xl px-6 py-3 bg-gradient-to-r from-[#0063A8] to-[#00A3E0] text-white font-semibold shadow-lg transition-transform hover:scale-[1.02] flex items-center justify-center gap-2">
+            <i data-lucide="aperture" class="w-4 h-4"></i> Capturar foto
           </button>
+          <button onclick="cancelarCamara()" class="text-xs text-slate-400 hover:text-slate-700 underline w-full text-center">Cancelar</button>
         </div>
+
+        <canvas id="capture-canvas" class="hidden"></canvas>
+
+        <div id="procesando-box" class="hidden text-center py-4">
+          <img id="captura-preview" class="mb-3 rounded-xl" alt="Foto capturada">
+          <div class="scan-pulse">
+            <div class="bubble-loader"><span></span><span></span><span></span></div>
+            <span>Leyendo texto de la cédula... (puede tardar unos segundos)</span>
+          </div>
+        </div>
+
+        <!-- Datos detectados: EDITABLES, para poder corregir lo que el OCR no leyó bien -->
+        <div id="datos-detectados" class="hidden bg-[#F5F9FC] border border-[#DCE8F0] rounded-xl p-4 space-y-3">
+          <p class="text-slate-500 text-xs">Revisa y corrige si algo no coincide con el documento físico:</p>
+          <div>
+            <label class="field-label">Cédula</label>
+            <input type="text" id="detectado-cedula" class="field-input">
+          </div>
+          <div>
+            <label class="field-label">Nombre completo</label>
+            <input type="text" id="detectado-nombre" class="field-input">
+          </div>
+          <div class="flex gap-2 pt-1">
+            <button onclick="reiniciarEscaneo()" class="flex-1 rounded-xl px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm transition">Tomar otra foto</button>
+            <button onclick="enviarDetectado()" class="flex-1 rounded-xl px-4 py-2 bg-gradient-to-r from-[#0063A8] to-[#00A3E0] text-white text-sm font-semibold transition-transform hover:scale-[1.02]">Enviar</button>
+          </div>
+        </div>
+
+        <div class="pt-3 border-t border-slate-100 space-y-2">
+          <label class="field-label">
+            <i data-lucide="keyboard" class="w-3.5 h-3.5"></i> ¿Prefieres escribir los datos directamente?
+          </label>
+          <input type="text" id="input-cedula-manual" placeholder="Cédula, ej: 1035800000" class="field-input">
+          <div class="flex gap-2">
+            <input type="text" id="input-nombre-manual" placeholder="Nombre completo" class="field-input flex-1">
+            <button onclick="enviarManual()"
+              class="rounded-xl px-4 py-3 bg-gradient-to-r from-[#D60078] to-[#D4A516] text-white shadow-lg transition-transform hover:scale-[1.02]">
+              <i data-lucide="send" class="w-4 h-4"></i>
+            </button>
+          </div>
+        </div>
+
+        <div id="status-box" class="text-sm text-center hidden"></div>
+
+        <button onclick="cambiarConfig()" class="text-slate-300 text-xs underline w-full text-center pt-2">Cambiar contraseña</button>
       </div>
-
-      <div id="status-box" class="text-sm text-center hidden"></div>
-
-      <button onclick="cambiarConfig()" class="text-white/30 text-xs underline w-full text-center pt-2">Cambiar contraseña</button>
     </div>
   </div>
 
   <script>
     /* =========================================================================
-     * CONFIGURACIÓN FIJA
-     * La URL del Web App ya viene puesta por defecto: el personal del evento
-     * ya no tiene que copiarla ni conocerla. Solo se guarda la contraseña,
-     * una vez por dispositivo (en localStorage de ese navegador).
+     * CONFIGURACIÓN FIJA (la URL ya viene puesta, no hay que copiarla)
      * ========================================================================= */
     const CONFIG = {
       WEBAPP_URL: 'https://script.google.com/macros/s/AKfycbxQ8IZihpgU90P0dkxXJ8eHNMzu53InIV9GE5nwSR8bYwPlR0m1sipVizW70tda4TU6/exec'
@@ -162,25 +209,19 @@
 
     function guardarConfig() {
       const token = document.getElementById('input-token').value.trim();
-      if (!token) {
-        alert('Escribe la contraseña antes de continuar.');
-        return;
-      }
+      if (!token) { alert('Escribe la contraseña antes de continuar.'); return; }
       localStorage.setItem('postobon_token', token);
       mostrarApp();
     }
-
     function cambiarConfig() {
       document.getElementById('app-panel').classList.add('hidden');
       document.getElementById('config-panel').classList.remove('hidden');
     }
-
     function mostrarApp() {
       document.getElementById('config-panel').classList.add('hidden');
       document.getElementById('app-panel').classList.remove('hidden');
       lucide.createIcons();
     }
-
     document.addEventListener('DOMContentLoaded', function () {
       lucide.createIcons();
       const savedToken = localStorage.getItem('postobon_token');
@@ -194,7 +235,7 @@
     function mostrarEstado(mensaje, tipo) {
       const el = document.getElementById('status-box');
       el.classList.remove('hidden');
-      el.className = 'text-sm text-center ' + (tipo === 'ok' ? 'text-emerald-400' : tipo === 'error' ? 'text-[#D60078]' : 'text-white/60');
+      el.className = 'text-sm text-center ' + (tipo === 'ok' ? 'text-emerald-600' : tipo === 'error' ? 'text-[#D60078]' : 'text-slate-500');
       el.innerHTML = mensaje;
     }
     function loaderBurbujas() {
@@ -202,61 +243,103 @@
     }
 
     /* =========================================================================
-     * CÁMARA / ZXING (lector de PDF417)
+     * SONIDO "DESTAPAR GASEOSA" (sintetizado, sin archivo externo)
      * ========================================================================= */
-    let codeReader = null;
+    function sonidoDestape() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(950, now);
+        osc.frequency.exponentialRampToValueAtTime(140, now + 0.12);
+        const oscGain = ctx.createGain();
+        oscGain.gain.setValueAtTime(0.5, now);
+        oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        osc.connect(oscGain).connect(ctx.destination);
+        osc.start(now); osc.stop(now + 0.16);
+
+        const bufferSize = Math.floor(ctx.sampleRate * 0.4);
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+        }
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.value = 3000;
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.setValueAtTime(0.22, now + 0.1);
+        noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+        noise.connect(filter).connect(noiseGain).connect(ctx.destination);
+        noise.start(now + 0.1); noise.stop(now + 0.5);
+      } catch (e) { /* sin soporte de audio, seguimos sin sonido */ }
+    }
+
+    /* =========================================================================
+     * CÁMARA: captura una foto fija (ya NO leemos código de barras)
+     * ========================================================================= */
+    let mediaStream = null;
 
     function abrirCamara() {
       document.getElementById('scanner-wrapper').classList.remove('hidden');
       document.getElementById('datos-detectados').classList.add('hidden');
+      document.getElementById('procesando-box').classList.add('hidden');
       document.getElementById('btn-abrir-camara').classList.add('hidden');
       document.getElementById('status-box').classList.add('hidden');
 
-      const hints = new Map();
-      // Restringimos a PDF417 porque es el formato real que usa la cédula
-      // colombiana clásica. Si se deja "detectar cualquier formato", ZXing
-      // puede confundirse con patrones parecidos y devolver basura.
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
-      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
-      codeReader = new ZXing.BrowserMultiFormatReader(hints);
-
-      codeReader.decodeFromConstraints(
-        { video: { facingMode: 'environment' } },
-        'video-preview',
-        function (result, err) {
-          if (result) {
-            const texto = result.getText();
-            const datos = extraerDatosCedula(texto);
-            detenerCamara();
-
-            if (!validarDatos(datos)) {
-              mostrarEstado('No se pudo leer bien la cédula (probablemente es el modelo digital nuevo). Usa el campo manual abajo. 👇', 'error');
-              document.getElementById('btn-abrir-camara').classList.remove('hidden');
-              return;
-            }
-            mostrarDatosDetectados(datos);
-          }
-          // "err" llega en CADA cuadro de video mientras no encuentra nada
-          // (NotFoundException); eso es normal, no es un error real.
-        }
-      ).catch(function (err) {
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      }).then(function (stream) {
+        mediaStream = stream;
+        document.getElementById('video-preview').srcObject = stream;
+      }).catch(function () {
         mostrarEstado('No se pudo acceder a la cámara. Usa el campo manual abajo. 👇', 'error');
-        detenerCamara();
+        cancelarCamara();
       });
     }
 
-    function detenerCamara() {
-      if (codeReader) {
-        try { codeReader.reset(); } catch (e) { /* ya estaba detenido */ }
-        codeReader = null;
+    function detenerStream_() {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(function (t) { t.stop(); });
+        mediaStream = null;
       }
+    }
+
+    function cancelarCamara() {
+      detenerStream_();
       document.getElementById('scanner-wrapper').classList.add('hidden');
       document.getElementById('btn-abrir-camara').classList.remove('hidden');
     }
 
-    function cancelarEscaneo() {
-      detenerCamara();
+    function capturarFoto() {
+      const video = document.getElementById('video-preview');
+      const canvas = document.getElementById('capture-canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Mejora simple de contraste en escala de grises: ayuda a Tesseract
+      // a distinguir mejor el texto impreso del fondo de la cédula.
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        const val = gray < 150 ? Math.max(0, gray - 15) : Math.min(255, gray + 25);
+        d[i] = d[i + 1] = d[i + 2] = val;
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      document.getElementById('captura-preview').src = canvas.toDataURL('image/jpeg', 0.9);
+
+      detenerStream_();
+      document.getElementById('scanner-wrapper').classList.add('hidden');
+      document.getElementById('procesando-box').classList.remove('hidden');
+
+      analizarFoto(canvas);
     }
 
     function reiniciarEscaneo() {
@@ -265,37 +348,59 @@
     }
 
     /* =========================================================================
-     * PARSEO DEL PDF417 DE LA CÉDULA COLOMBIANA (modelo clásico, pre-2022)
-     * Los campos están en posiciones FIJAS de caracteres dentro del texto
-     * decodificado (no separados por comas ni nada así). Estas posiciones
-     * son las documentadas públicamente para este formato de cédula.
+     * OCR con Tesseract.js: lee el texto de la foto y trata de identificar
+     * la cédula y el nombre completo. Es un proceso de "mejor esfuerzo": la
+     * calidad depende mucho de la luz, el enfoque y el brillo de la cédula
+     * (el plástico suele generar reflejos). Por eso los campos quedan
+     * SIEMPRE editables antes de enviar.
      * ========================================================================= */
-    function limpiarCampo_(texto) {
-      return (texto || '')
-        .replace(/\u0000/g, '')
-        .replace(/[^\x20-\x7EÀ-ÿÑñ]/g, '')
-        .trim();
+    let tesseractWorker = null;
+
+    async function analizarFoto(canvas) {
+      try {
+        if (!tesseractWorker) {
+          tesseractWorker = await Tesseract.createWorker('spa');
+        }
+        const resultado = await tesseractWorker.recognize(canvas);
+        const datos = extraerDatosDeTexto(resultado.data.text);
+
+        document.getElementById('procesando-box').classList.add('hidden');
+        document.getElementById('btn-abrir-camara').classList.remove('hidden');
+        mostrarDatosDetectados(datos);
+      } catch (err) {
+        document.getElementById('procesando-box').classList.add('hidden');
+        document.getElementById('btn-abrir-camara').classList.remove('hidden');
+        mostrarEstado('No se pudo leer el texto automáticamente. Escribe los datos manualmente. 👇', 'error');
+      }
     }
 
-    function extraerDatosCedula(textoCrudo) {
-      const t = textoCrudo || '';
-      const documento = limpiarCampo_(t.substring(48, 58)).replace(/^0+/, '');
-      const apellido1 = limpiarCampo_(t.substring(58, 80));
-      const apellido2 = limpiarCampo_(t.substring(81, 104));
-      const nombre1 = limpiarCampo_(t.substring(104, 127));
-      const nombre2 = limpiarCampo_(t.substring(127, 150));
+    function extraerDatosDeTexto(textoCrudo) {
+      const texto = textoCrudo || '';
 
-      const nombreCompleto = [apellido1, apellido2, nombre1, nombre2]
-        .filter(Boolean)
-        .join(' ');
+      // Cédula: el primer número de 6 a 10 dígitos (acepta puntos de miles: 1.035.800.000)
+      const matchNumero = texto.match(/\d{1,3}(?:[.\s]\d{3}){1,3}|\d{6,10}/);
+      const cedula = matchNumero ? matchNumero[0].replace(/[^0-9]/g, '') : '';
 
-      return { cedula: documento, nombre: nombreCompleto };
-    }
+      // Nombre: líneas casi todo en mayúsculas, sin las palabras fijas del documento
+      const palabrasIgnorar = [
+        'REPUBLICA', 'REPÚBLICA', 'COLOMBIA', 'CEDULA', 'CÉDULA', 'CIUDADANIA', 'CIUDADANÍA',
+        'IDENTIFICACION', 'IDENTIFICACIÓN', 'NUIP', 'FECHA', 'NACIMIENTO', 'LUGAR', 'SEXO',
+        'ESTATURA', 'FIRMA', 'REGISTRADURIA', 'REGISTRADURÍA', 'NACIONAL', 'ESTADO', 'CIVIL'
+      ];
+      const lineas = texto.split('\n')
+        .map(function (l) { return l.trim(); })
+        .filter(function (l) {
+          if (l.length < 3) return false;
+          const soloLetras = l.replace(/[^A-ZÁÉÍÓÚÑ ]/gi, '');
+          if (soloLetras.length < l.length * 0.6) return false;
+          if (l !== l.toUpperCase()) return false;
+          const arriba = l.toUpperCase();
+          return !palabrasIgnorar.some(function (p) { return arriba.indexOf(p) !== -1; });
+        });
 
-    function validarDatos(datos) {
-      const cedulaValida = /^[0-9]{5,12}$/.test(datos.cedula);
-      const nombreValido = datos.nombre && datos.nombre.length >= 3;
-      return cedulaValida && nombreValido;
+      const nombre = lineas.slice(0, 4).join(' ').replace(/\s+/g, ' ').trim();
+
+      return { cedula: cedula, nombre: nombre };
     }
 
     function mostrarDatosDetectados(datos) {
@@ -309,10 +414,8 @@
     function enviarDetectado() {
       const cedula = document.getElementById('detectado-cedula').value.trim();
       const nombre = document.getElementById('detectado-nombre').value.trim();
-      if (!cedula) {
-        mostrarEstado('La cédula no puede estar vacía.', 'error');
-        return;
-      }
+      if (!cedula) { mostrarEstado('La cédula no puede estar vacía.', 'error'); return; }
+      sonidoDestape();
       enviarAsistencia(cedula, nombre);
     }
 
@@ -320,17 +423,16 @@
       const cedula = document.getElementById('input-cedula-manual').value.trim();
       const nombre = document.getElementById('input-nombre-manual').value.trim();
       if (!cedula) return;
+      sonidoDestape();
       enviarAsistencia(cedula, nombre);
     }
 
     function enviarAsistencia(cedula, nombre) {
       const token = localStorage.getItem('postobon_token');
-
       mostrarEstado('Guardando... ' + loaderBurbujas(), 'info');
 
-      // OJO: se usa 'text/plain' a propósito para evitar que el navegador
-      // dispare una petición "preflight" (OPTIONS) que Apps Script no sabe
-      // responder. El servidor igual interpreta el contenido como JSON.
+      // 'text/plain' evita que el navegador dispare una petición "preflight"
+      // (OPTIONS) que Apps Script no sabe responder.
       fetch(CONFIG.WEBAPP_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
