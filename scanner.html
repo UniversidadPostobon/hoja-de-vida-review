@@ -24,7 +24,11 @@
   </script>
 
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+
+  <!-- ZXing: sí soporta PDF417 (el código de la cédula colombiana clásica).
+       QuaggaJS, que usábamos antes, solo lee códigos de barras 1D
+       (Code128, EAN, etc.) y por eso "adivinaba" un número que no era. -->
+  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
 
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0b0f19; }
@@ -48,8 +52,13 @@
       0%, 80%, 100% { transform: translateY(0); opacity: 0.6; }
       40% { transform: translateY(-10px); opacity: 1; }
     }
-    #scanner-container video, #scanner-container canvas {
-      width: 100% !important; height: 100% !important; object-fit: cover; border-radius: 0.75rem;
+    #video-preview {
+      width: 100%; height: 14rem; object-fit: cover; border-radius: 0.75rem;
+      background: #000; border: 1px solid rgba(255,255,255,0.1);
+    }
+    .scan-pulse {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      color: rgba(255,255,255,0.6); font-size: 0.75rem; margin-top: 0.5rem;
     }
   </style>
 </head>
@@ -65,14 +74,9 @@
       <p class="text-white/50 text-xs mt-1">Postobón · Generación que Refresca</p>
     </div>
 
-    <!-- ================= CONFIGURACIÓN (solo primera vez) ================= -->
+    <!-- ================= CONFIGURACIÓN (solo primera vez, en este dispositivo) ================= -->
     <div id="config-panel" class="space-y-3 mb-2">
-      <p class="text-white/40 text-xs">Configura esto una sola vez por dispositivo (queda guardado en este navegador).</p>
-      <div>
-        <label class="text-xs text-white/60 mb-1 block">URL de tu Web App de Apps Script (termina en /exec)</label>
-        <input type="text" id="input-webapp-url" placeholder="https://script.google.com/macros/s/XXXX/exec"
-          class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-purple transition">
-      </div>
+      <p class="text-white/40 text-xs">Solo la primera vez en este celular/computador. La URL ya viene configurada, solo falta la contraseña.</p>
       <div>
         <label class="text-xs text-white/60 mb-1 block">Contraseña de Asistencia (la misma del portal principal)</label>
         <input type="password" id="input-token" placeholder="postobon123"
@@ -87,32 +91,50 @@
     <!-- ================= ESCÁNER ================= -->
     <div id="app-panel" class="hidden space-y-4">
 
+      <p class="text-white/40 text-xs text-center bg-white/5 border border-white/10 rounded-xl p-2.5">
+        ⚠️ Este escáner lee el código de barras de la <strong>cédula física clásica</strong> (la de antes de 2022).
+        Si la cédula es del modelo digital más reciente, puede que no la reconozca — usa el campo manual en ese caso.
+      </p>
+
       <button id="btn-abrir-camara" onclick="abrirCamara()"
         class="glow-btn w-full rounded-xl px-6 py-3 bg-gradient-to-r from-[#612C7D] to-[#D60078] font-semibold shadow-lg transition-transform hover:scale-[1.02] flex items-center justify-center gap-2">
         <i data-lucide="camera" class="w-4 h-4"></i> Abrir cámara
       </button>
 
       <div id="scanner-wrapper" class="hidden">
-        <div id="scanner-container" class="w-full h-56 bg-black/40 rounded-xl overflow-hidden relative border border-white/10"></div>
-        <p class="text-white/40 text-xs mt-2 text-center">Apunta al código de barras de la cédula 📷</p>
-        <button onclick="detenerCamara()" class="mt-2 text-xs text-white/50 hover:text-white underline w-full text-center">Cancelar</button>
+        <video id="video-preview" autoplay muted playsinline></video>
+        <div id="scan-status" class="scan-pulse">
+          <div class="bubble-loader"><span></span><span></span><span></span></div>
+          <span>Buscando código de barras...</span>
+        </div>
+        <button onclick="cancelarEscaneo()" class="mt-2 text-xs text-white/50 hover:text-white underline w-full text-center">Cancelar</button>
       </div>
 
-      <div id="codigo-detectado" class="hidden bg-white/5 border border-white/10 rounded-xl p-4 text-center">
-        <p class="text-white/50 text-xs mb-1">Cédula detectada:</p>
-        <p id="codigo-detectado-valor" class="text-2xl font-bold tracking-wider text-[#D60078]"></p>
-        <div class="flex gap-2 mt-3">
+      <!-- Datos detectados: EDITABLES, para poder corregir si el escaneo falló parcialmente -->
+      <div id="datos-detectados" class="hidden bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+        <p class="text-white/50 text-xs">Revisa que los datos coincidan con el documento físico antes de enviar:</p>
+        <div>
+          <label class="text-xs text-white/60 mb-1 block">Cédula</label>
+          <input type="text" id="detectado-cedula" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
+        </div>
+        <div>
+          <label class="text-xs text-white/60 mb-1 block">Nombre completo</label>
+          <input type="text" id="detectado-nombre" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
+        </div>
+        <div class="flex gap-2 pt-1">
           <button onclick="reiniciarEscaneo()" class="flex-1 rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 text-sm transition">Escanear otra</button>
           <button onclick="enviarDetectado()" class="flex-1 rounded-xl px-4 py-2 bg-gradient-to-r from-[#612C7D] to-[#D60078] text-sm font-semibold transition-transform hover:scale-[1.02]">Enviar</button>
         </div>
       </div>
 
-      <div class="pt-3 border-t border-white/10">
+      <div class="pt-3 border-t border-white/10 space-y-2">
         <label class="text-xs text-white/60 mb-1 flex items-center gap-1">
-          <i data-lucide="keyboard" class="w-3.5 h-3.5"></i> ¿La cámara no funciona? Escribe la cédula
+          <i data-lucide="keyboard" class="w-3.5 h-3.5"></i> ¿La cámara no funciona o no lee bien? Escribe los datos
         </label>
+        <input type="text" id="input-cedula-manual" placeholder="Cédula, ej: 1035800000"
+          class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
         <div class="flex gap-2">
-          <input type="text" id="input-cedula-manual" placeholder="Ej: 1035800000"
+          <input type="text" id="input-nombre-manual" placeholder="Nombre completo (opcional)"
             class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-pink transition">
           <button onclick="enviarManual()"
             class="rounded-xl px-4 py-3 bg-gradient-to-r from-[#D60078] to-[#D4A516] shadow-lg transition-transform hover:scale-[1.02]">
@@ -123,20 +145,27 @@
 
       <div id="status-box" class="text-sm text-center hidden"></div>
 
-      <button onclick="cambiarConfig()" class="text-white/30 text-xs underline w-full text-center pt-2">Cambiar configuración</button>
+      <button onclick="cambiarConfig()" class="text-white/30 text-xs underline w-full text-center pt-2">Cambiar contraseña</button>
     </div>
   </div>
 
   <script>
-    /* ============== Persistencia de configuración (por navegador) ============== */
+    /* =========================================================================
+     * CONFIGURACIÓN FIJA
+     * La URL del Web App ya viene puesta por defecto: el personal del evento
+     * ya no tiene que copiarla ni conocerla. Solo se guarda la contraseña,
+     * una vez por dispositivo (en localStorage de ese navegador).
+     * ========================================================================= */
+    const CONFIG = {
+      WEBAPP_URL: 'https://script.google.com/macros/s/AKfycbxQ8IZihpgU90P0dkxXJ8eHNMzu53InIV9GE5nwSR8bYwPlR0m1sipVizW70tda4TU6/exec'
+    };
+
     function guardarConfig() {
-      const url = document.getElementById('input-webapp-url').value.trim();
       const token = document.getElementById('input-token').value.trim();
-      if (!url || !token) {
-        alert('Completa la URL y la contraseña antes de continuar.');
+      if (!token) {
+        alert('Escribe la contraseña antes de continuar.');
         return;
       }
-      localStorage.setItem('postobon_webapp_url', url);
       localStorage.setItem('postobon_token', token);
       mostrarApp();
     }
@@ -154,10 +183,8 @@
 
     document.addEventListener('DOMContentLoaded', function () {
       lucide.createIcons();
-      const savedUrl = localStorage.getItem('postobon_webapp_url');
       const savedToken = localStorage.getItem('postobon_token');
-      if (savedUrl && savedToken) {
-        document.getElementById('input-webapp-url').value = savedUrl;
+      if (savedToken) {
         document.getElementById('input-token').value = savedToken;
         mostrarApp();
       }
@@ -174,91 +201,149 @@
       return '<div class="bubble-loader"><span></span><span></span><span></span></div>';
     }
 
-    /* ============== Cámara / Quagga ============== */
-    let scannerActivo = false;
+    /* =========================================================================
+     * CÁMARA / ZXING (lector de PDF417)
+     * ========================================================================= */
+    let codeReader = null;
 
     function abrirCamara() {
       document.getElementById('scanner-wrapper').classList.remove('hidden');
-      document.getElementById('codigo-detectado').classList.add('hidden');
+      document.getElementById('datos-detectados').classList.add('hidden');
       document.getElementById('btn-abrir-camara').classList.add('hidden');
+      document.getElementById('status-box').classList.add('hidden');
 
-      Quagga.init({
-        inputStream: {
-          name: 'Live',
-          type: 'LiveStream',
-          target: document.querySelector('#scanner-container'),
-          constraints: { facingMode: 'environment' }
-        },
-        decoder: {
-          readers: ['code_128_reader', 'code_39_reader', 'ean_reader', 'ean_8_reader']
-        },
-        locate: true
-      }, function (err) {
-        if (err) {
-          mostrarEstado('No se pudo acceder a la cámara. Usa el campo manual abajo. 👇', 'error');
-          detenerCamara();
-          return;
+      const hints = new Map();
+      // Restringimos a PDF417 porque es el formato real que usa la cédula
+      // colombiana clásica. Si se deja "detectar cualquier formato", ZXing
+      // puede confundirse con patrones parecidos y devolver basura.
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+      codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+      codeReader.decodeFromConstraints(
+        { video: { facingMode: 'environment' } },
+        'video-preview',
+        function (result, err) {
+          if (result) {
+            const texto = result.getText();
+            const datos = extraerDatosCedula(texto);
+            detenerCamara();
+
+            if (!validarDatos(datos)) {
+              mostrarEstado('No se pudo leer bien la cédula (probablemente es el modelo digital nuevo). Usa el campo manual abajo. 👇', 'error');
+              document.getElementById('btn-abrir-camara').classList.remove('hidden');
+              return;
+            }
+            mostrarDatosDetectados(datos);
+          }
+          // "err" llega en CADA cuadro de video mientras no encuentra nada
+          // (NotFoundException); eso es normal, no es un error real.
         }
-        Quagga.start();
-        scannerActivo = true;
-      });
-
-      Quagga.onDetected(function (result) {
-        if (!scannerActivo) return;
-        const codigo = result.codeResult.code;
+      ).catch(function (err) {
+        mostrarEstado('No se pudo acceder a la cámara. Usa el campo manual abajo. 👇', 'error');
         detenerCamara();
-        document.getElementById('codigo-detectado').classList.remove('hidden');
-        document.getElementById('codigo-detectado-valor').textContent = codigo;
-        lucide.createIcons();
       });
     }
 
     function detenerCamara() {
-      if (scannerActivo) {
-        Quagga.stop();
-        scannerActivo = false;
+      if (codeReader) {
+        try { codeReader.reset(); } catch (e) { /* ya estaba detenido */ }
+        codeReader = null;
       }
       document.getElementById('scanner-wrapper').classList.add('hidden');
       document.getElementById('btn-abrir-camara').classList.remove('hidden');
     }
 
+    function cancelarEscaneo() {
+      detenerCamara();
+    }
+
     function reiniciarEscaneo() {
-      document.getElementById('codigo-detectado').classList.add('hidden');
+      document.getElementById('datos-detectados').classList.add('hidden');
       abrirCamara();
     }
 
-    function enviarDetectado() {
-      const codigo = document.getElementById('codigo-detectado-valor').textContent;
-      enviarCedula(codigo);
+    /* =========================================================================
+     * PARSEO DEL PDF417 DE LA CÉDULA COLOMBIANA (modelo clásico, pre-2022)
+     * Los campos están en posiciones FIJAS de caracteres dentro del texto
+     * decodificado (no separados por comas ni nada así). Estas posiciones
+     * son las documentadas públicamente para este formato de cédula.
+     * ========================================================================= */
+    function limpiarCampo_(texto) {
+      return (texto || '')
+        .replace(/\u0000/g, '')
+        .replace(/[^\x20-\x7EÀ-ÿÑñ]/g, '')
+        .trim();
     }
 
-    function enviarManual() {
-      const codigo = document.getElementById('input-cedula-manual').value.trim();
-      if (!codigo) return;
-      enviarCedula(codigo);
+    function extraerDatosCedula(textoCrudo) {
+      const t = textoCrudo || '';
+      const documento = limpiarCampo_(t.substring(48, 58)).replace(/^0+/, '');
+      const apellido1 = limpiarCampo_(t.substring(58, 80));
+      const apellido2 = limpiarCampo_(t.substring(81, 104));
+      const nombre1 = limpiarCampo_(t.substring(104, 127));
+      const nombre2 = limpiarCampo_(t.substring(127, 150));
+
+      const nombreCompleto = [apellido1, apellido2, nombre1, nombre2]
+        .filter(Boolean)
+        .join(' ');
+
+      return { cedula: documento, nombre: nombreCompleto };
+    }
+
+    function validarDatos(datos) {
+      const cedulaValida = /^[0-9]{5,12}$/.test(datos.cedula);
+      const nombreValido = datos.nombre && datos.nombre.length >= 3;
+      return cedulaValida && nombreValido;
+    }
+
+    function mostrarDatosDetectados(datos) {
+      document.getElementById('detectado-cedula').value = datos.cedula;
+      document.getElementById('detectado-nombre').value = datos.nombre;
+      document.getElementById('datos-detectados').classList.remove('hidden');
+      lucide.createIcons();
     }
 
     /* ============== Envío al Web App de Apps Script ============== */
-    function enviarCedula(codigo) {
-      const url = localStorage.getItem('postobon_webapp_url');
+    function enviarDetectado() {
+      const cedula = document.getElementById('detectado-cedula').value.trim();
+      const nombre = document.getElementById('detectado-nombre').value.trim();
+      if (!cedula) {
+        mostrarEstado('La cédula no puede estar vacía.', 'error');
+        return;
+      }
+      enviarAsistencia(cedula, nombre);
+    }
+
+    function enviarManual() {
+      const cedula = document.getElementById('input-cedula-manual').value.trim();
+      const nombre = document.getElementById('input-nombre-manual').value.trim();
+      if (!cedula) return;
+      enviarAsistencia(cedula, nombre);
+    }
+
+    function enviarAsistencia(cedula, nombre) {
       const token = localStorage.getItem('postobon_token');
 
       mostrarEstado('Guardando... ' + loaderBurbujas(), 'info');
 
-      // OJO: se usa 'text/plain' a propósito. Si se usa 'application/json',
-      // el navegador dispara una petición "preflight" (OPTIONS) que Apps
-      // Script no sabe responder, y la petición falla por CORS. Con
-      // text/plain se evita el preflight; el servidor igual interpreta
-      // el contenido como JSON (ver doPost en Code.gs).
-      fetch(url, {
+      // OJO: se usa 'text/plain' a propósito para evitar que el navegador
+      // dispare una petición "preflight" (OPTIONS) que Apps Script no sabe
+      // responder. El servidor igual interpreta el contenido como JSON.
+      fetch(CONFIG.WEBAPP_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ cedula: codigo, token: token })
+        body: JSON.stringify({ cedula: cedula, nombre: nombre, token: token })
       })
         .then(function (res) { return res.json(); })
         .then(function (data) {
           mostrarEstado(data.message, data.status);
-          document.getElementById('input-cedula-manual').value = '';
+          if (data.status === 'ok') {
+            document.getElementById('input-cedula-manual').value = '';
+            document.getElementById('input-nombre-manual').value = '';
+            document.getElementById('datos-detectados').classList.add('hidden');
+          }
         })
         .catch(function (err) {
           mostrarEstado('Error de conexión: ' + err.message, 'error');
